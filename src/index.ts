@@ -1,5 +1,6 @@
 import WebSocket, { WebSocketServer } from "ws";
-import { createServer, Server } from "http";
+import { createServer } from "http";
+import { networkInterfaces } from "os";
 
 interface LocationData {
   latitude: number;
@@ -349,10 +350,28 @@ function broadcastClientList() {
   });
 }
 
-const PORT = process.env["PORT"] || 8080;
-server.listen(PORT, () => {
-  console.log(`GPS WebSocket server is running on port ${PORT}`);
-  console.log(`Connect to: ws://localhost:${PORT}`);
+const PORT = Number(process.env["PORT"]) || 8080;
+const HOST = "0.0.0.0"; // Bind to all interfaces
+
+server.listen(PORT, HOST, () => {
+  console.log(`🚀 GPS WebSocket server is running on ${HOST}:${PORT}`);
+  console.log(`📱 Local access: ws://localhost:${PORT}`);
+
+  // Display all available network addresses
+  const interfaces = networkInterfaces();
+  console.log("\n🔗 Connect from React Native using one of these URLs:");
+
+  Object.keys(interfaces).forEach((name) => {
+    interfaces[name]?.forEach((net) => {
+      if (net.family === "IPv4" && !net.internal) {
+        console.log(`   ws://${net.address}:${PORT}`);
+      }
+    });
+  });
+
+  console.log("\n📱 For Android Emulator use: ws://10.0.2.2:8080");
+  console.log("📱 For iOS Simulator use: ws://localhost:8080");
+  console.log("📱 For Physical Devices use one of the IP addresses above\n");
 });
 
 process.on("SIGINT", () => {
