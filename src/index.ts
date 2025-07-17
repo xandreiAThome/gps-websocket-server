@@ -1,13 +1,6 @@
 import WebSocket, { WebSocketServer } from "ws";
-import { createServer } from "http";
+import { createServer, Server } from "http";
 
-// Define types for our bus tracking application
-// System Design:
-// - bus_driver: Sends location updates for their assigned bus
-// - passenger: Receives location updates from buses they subscribe to
-// - admin: Can both send and receive location updates for monitoring
-
-// Raw location data (just GPS coordinates without user/bus metadata)
 interface LocationData {
   latitude: number;
   longitude: number;
@@ -15,7 +8,6 @@ interface LocationData {
   timestamp: number;
 }
 
-// Complete location data with server-added metadata for broadcasting
 interface BroadcastLocationData extends LocationData {
   busId: string;
   userId: string;
@@ -23,11 +15,21 @@ interface BroadcastLocationData extends LocationData {
 
 interface ClientMessage {
   type: "location_update" | "subscribe" | "unsubscribe" | "register";
-  data?: LocationData; // Just the GPS coordinates
-  busId?: string; // Used for registration and location updates
-  userId?: string; // Used for registration
-  clientType?: "bus_driver" | "passenger" | "admin";
-  subscribeToBusId?: string; // Specific bus to subscribe to
+  data?: LocationData;
+  busId?: string;
+  userId?: string;
+  clientType: "bus_driver" | "admin" | "passenger";
+  subscribeToBusId?: string;
+}
+
+interface ClientInfo {
+  id: string;
+  type: "bus_driver" | "admin" | "passenger";
+  busId?: string;
+  userId: string;
+  lastLocation?: LocationData;
+  connected: boolean;
+  subscribedToBusId?: string | undefined;
 }
 
 interface ServerMessage {
@@ -39,170 +41,137 @@ interface ServerMessage {
   clients?: ClientInfo[];
 }
 
-interface ClientInfo {
-  id: string;
-  type: "bus_driver" | "passenger" | "admin"; // More specific roles
-  busId?: string;
-  userId: string;
-  lastLocation?: BroadcastLocationData;
-  connected: boolean;
-  subscribedToBusId?: string | undefined; // Which bus this client is subscribed to
-}
-
-// Create HTTP server
 const server = createServer();
 const wss = new WebSocketServer({ server });
 
-// Store connected clients with extended information
 const clients = new Map<WebSocket, ClientInfo>();
 const busLocations = new Map<string, BroadcastLocationData>();
-// Map of busId to Set of subscribed clients
 const busSubscriptions = new Map<string, Set<WebSocket>>();
 
 wss.on("connection", (ws: WebSocket) => {
-  console.log("New client connected");
+  console.log("new client connected ");
 
-  // Initialize client info
   const clientInfo: ClientInfo = {
     id: generateClientId(),
-    type: "passenger", // Default to passenger - must register as bus_driver to broadcast
-    userId: "", // Will be set during registration
+    type: "passenger", //default
+    userId: "", // will be set on registration
     connected: true,
   };
 
   clients.set(ws, clientInfo);
-  // No auto-subscription - clients must explicitly subscribe to a specific bus
 
-  // Send connection acknowledgment
   const ackMessage: ServerMessage = {
     type: "connection_ack",
     message: "Connected to GPS tracking server",
     clientCount: clients.size,
   };
+
   ws.send(JSON.stringify(ackMessage));
 
-  // Send current client and bus information
   broadcastClientListToSingle(ws);
 
-  // Handle incoming messages
   ws.on("message", (message: WebSocket.Data) => {
     try {
-      const parsedMessage: ClientMessage = JSON.parse(message.toString());
-      handleClientMessage(ws, parsedMessage);
-    } catch (error) {
-      console.error("Error parsing message:", error);
-      const errorMessage: ServerMessage = {
-        type: "error",
-        message: "Invalid message format",
-      };
-      ws.send(JSON.stringify(errorMessage));
-    }
+      const parsedMsg: ClientMessage = JSON.parse(message.toString());
+      handleClientMessage(ws, parsedMsg);
+    } catch (err) {}
   });
 
-  // Handle client disconnect
   ws.on("close", () => {
     const clientInfo = clients.get(ws);
-    console.log(`Client disconnected: ${clientInfo?.id || "unknown"}`);
+    if (clientInfo) {
+      console.log(`Client ${clientInfo.id} disconnected`);
 
-    // Remove from bus subscriptions
-    if (clientInfo?.subscribedToBusId) {
-      const subscribers = busSubscriptions.get(clientInfo.subscribedToBusId);
-      if (subscribers) {
-        subscribers.delete(ws);
-        if (subscribers.size === 0) {
-          busSubscriptions.delete(clientInfo.subscribedToBusId);
+      // Clean up subscriptions
+      if (clientInfo.subscribedToBusId) {
+        const subscribers = busSubscriptions.get(clientInfo.subscribedToBusId);
+        if (subscribers) {
+          subscribers.delete(ws);
+          if (subscribers.size === 0) {
+            busSubscriptions.delete(clientInfo.subscribedToBusId);
+          }
         }
       }
+
+      // Remove client from clients map
+      clients.delete(ws);
+
+      // Broadcast updated client list
+      broadcastClientList();
     }
-
-    clients.delete(ws);
-  });
-
-  // Handle errors
-  ws.on("error", (error: Error) => {
-    const clientInfo = clients.get(ws);
-    console.error(
-      `WebSocket error for client ${clientInfo?.id || "unknown"}:`,
-      error
-    );
-
-    // Remove from bus subscriptions
-    if (clientInfo?.subscribedToBusId) {
-      const subscribers = busSubscriptions.get(clientInfo.subscribedToBusId);
-      if (subscribers) {
-        subscribers.delete(ws);
-        if (subscribers.size === 0) {
-          busSubscriptions.delete(clientInfo.subscribedToBusId);
-        }
-      }
-    }
-
-    clients.delete(ws);
   });
 });
 
-function handleClientMessage(ws: WebSocket, message: ClientMessage): void {
+function handleClientMessage(ws: WebSocket, message: ClientMessage) {
   const clientInfo = clients.get(ws);
+
   if (!clientInfo) return;
 
   switch (message.type) {
     case "register":
-      // Require userId for all clients
       if (!message.userId) {
-        const errorMessage: ServerMessage = {
+        const errMsg: ServerMessage = {
           type: "error",
-          message: "userId is required during registration",
+          message: "register first with userId",
         };
-        ws.send(JSON.stringify(errorMessage));
+        ws.send(JSON.stringify(errMsg));
         return;
       }
 
-      // Client registers with specific type and IDs
       if (message.clientType) {
-        // Validate that bus drivers register with a busId
         if (message.clientType === "bus_driver" && !message.busId) {
-          const errorMessage: ServerMessage = {
+          const errMsg: ServerMessage = {
             type: "error",
-            message: "Bus drivers must register with a busId",
+            message: "bus_driver must register with busId",
           };
-          ws.send(JSON.stringify(errorMessage));
+          ws.send(JSON.stringify(errMsg));
+          return;
+        } else if (message.clientType !== "bus_driver" && message.busId) {
+          const errMsg: ServerMessage = {
+            type: "error",
+            message: "clientTypes that are not bus drivers must not have busId",
+          };
+          ws.send(JSON.stringify(errMsg));
           return;
         }
 
         clientInfo.type = message.clientType;
+        if (message.busId) clientInfo.busId = message.busId;
+        clientInfo.userId = message.userId;
+
+        console.log(
+          `Client ${clientInfo.userId} (${clientInfo.id}) registered as ${
+            clientInfo.type
+          }${clientInfo.busId ? ` for bus ${clientInfo.busId}` : ""}`
+        );
+
+        broadcastClientList();
+        break;
       }
-      if (message.busId) {
-        clientInfo.busId = message.busId;
-      }
-
-      clientInfo.userId = message.userId;
-
-      console.log(
-        `Client ${clientInfo.userId} (${clientInfo.id}) registered as ${
-          clientInfo.type
-        }${clientInfo.busId ? ` for bus ${clientInfo.busId}` : ""}`
-      );
-
-      // Send updated client info to all clients
-      broadcastClientList();
-      break;
 
     case "location_update":
-      // Only bus drivers and admins can send location updates, and they must have a busId
+      if (!message.userId) {
+        const errMsg: ServerMessage = {
+          type: "error",
+          message: "register first with userId",
+        };
+        ws.send(JSON.stringify(errMsg));
+        return;
+      }
+
       if (
         message.data &&
         (clientInfo.type === "bus_driver" || clientInfo.type === "admin") &&
         clientInfo.busId
       ) {
-        // Create complete location data with server-added metadata
-        const broadcastLocationData: BroadcastLocationData = {
+        const broadcastLocData: BroadcastLocationData = {
           ...message.data,
           busId: clientInfo.busId,
           userId: clientInfo.userId,
         };
 
-        clientInfo.lastLocation = broadcastLocationData;
-        handleLocationUpdate(broadcastLocationData);
+        clientInfo.lastLocation = broadcastLocData;
+        handleLocationUpdate(broadcastLocData);
       } else if (!clientInfo.busId) {
         const errorMessage: ServerMessage = {
           type: "error",
@@ -219,7 +188,15 @@ function handleClientMessage(ws: WebSocket, message: ClientMessage): void {
       break;
 
     case "subscribe":
-      // Client wants to receive location updates from a specific bus
+      if (!message.userId) {
+        const errMsg: ServerMessage = {
+          type: "error",
+          message: "register first with userId",
+        };
+        ws.send(JSON.stringify(errMsg));
+        return;
+      }
+
       if (!message.subscribeToBusId) {
         const errorMessage: ServerMessage = {
           type: "error",
@@ -229,7 +206,6 @@ function handleClientMessage(ws: WebSocket, message: ClientMessage): void {
         return;
       }
 
-      // Unsubscribe from previous bus if any
       if (clientInfo.subscribedToBusId) {
         const oldSubscribers = busSubscriptions.get(
           clientInfo.subscribedToBusId
@@ -242,7 +218,6 @@ function handleClientMessage(ws: WebSocket, message: ClientMessage): void {
         }
       }
 
-      // Subscribe to new bus
       clientInfo.subscribedToBusId = message.subscribeToBusId;
 
       if (!busSubscriptions.has(message.subscribeToBusId)) {
@@ -254,19 +229,26 @@ function handleClientMessage(ws: WebSocket, message: ClientMessage): void {
         `Client ${clientInfo.id} subscribed to bus ${message.subscribeToBusId}`
       );
 
-      // Send current location of the subscribed bus if available
-      const currentLocation = busLocations.get(message.subscribeToBusId);
-      if (currentLocation) {
-        const locationMessage: ServerMessage = {
+      const currLoc = busLocations.get(message.subscribeToBusId);
+      if (currLoc) {
+        const locationMsg: ServerMessage = {
           type: "location_broadcast",
-          data: currentLocation,
+          data: currLoc,
         };
-        ws.send(JSON.stringify(locationMessage));
+        ws.send(JSON.stringify(locationMsg));
       }
       break;
 
     case "unsubscribe":
-      // Client no longer wants location updates
+      if (!message.userId) {
+        const errMsg: ServerMessage = {
+          type: "error",
+          message: "register first with userId",
+        };
+        ws.send(JSON.stringify(errMsg));
+        return;
+      }
+
       if (clientInfo.subscribedToBusId) {
         const subscribers = busSubscriptions.get(clientInfo.subscribedToBusId);
         if (subscribers) {
@@ -288,15 +270,14 @@ function handleClientMessage(ws: WebSocket, message: ClientMessage): void {
         message: "Unknown message type",
       };
       ws.send(JSON.stringify(errorMessage));
+      break;
   }
 }
 
-function handleLocationUpdate(locationData: BroadcastLocationData): void {
-  // Store the location data
+function handleLocationUpdate(locationData: BroadcastLocationData) {
   const busId = locationData.busId;
   busLocations.set(busId, locationData);
 
-  // Broadcast only to clients subscribed to this specific bus
   const subscribedClients = busSubscriptions.get(busId);
   if (subscribedClients && subscribedClients.size > 0) {
     const broadcastMessage: ServerMessage = {
@@ -304,11 +285,11 @@ function handleLocationUpdate(locationData: BroadcastLocationData): void {
       data: locationData,
     };
 
-    const messageString = JSON.stringify(broadcastMessage);
+    const jsonMessage = JSON.stringify(broadcastMessage);
 
     subscribedClients.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
-        client.send(messageString);
+        client.send(jsonMessage);
       }
     });
 
@@ -334,61 +315,52 @@ function generateClientId(): string {
   return Math.random().toString(36).substr(2, 9);
 }
 
-function broadcastClientListToSingle(ws: WebSocket): void {
-  const clientsList: ClientInfo[] = Array.from(clients.values());
+function broadcastClientListToSingle(ws: WebSocket) {
+  const clientList: ClientInfo[] = Array.from(clients.values());
   const activeBuses = Array.from(busLocations.keys());
 
-  const message: ServerMessage = {
+  const msg: ServerMessage = {
     type: "client_list",
-    clients: clientsList,
+    clients: clientList,
     activeBuses: activeBuses,
     clientCount: clients.size,
   };
-  ws.send(JSON.stringify(message));
+
+  ws.send(JSON.stringify(msg));
 }
 
-function broadcastClientList(): void {
-  const clientsList: ClientInfo[] = Array.from(clients.values());
+function broadcastClientList() {
+  const clientList: ClientInfo[] = Array.from(clients.values());
   const activeBuses = Array.from(busLocations.keys());
 
-  const message: ServerMessage = {
+  const msg: ServerMessage = {
     type: "client_list",
-    clients: clientsList,
+    clients: clientList,
     activeBuses: activeBuses,
     clientCount: clients.size,
   };
 
-  const messageString = JSON.stringify(message);
+  const jsonMsg = JSON.stringify(msg);
 
   clients.forEach((_, client) => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(messageString);
+      client.send(jsonMsg);
     }
   });
 }
 
-// Start the server
 const PORT = process.env["PORT"] || 8080;
 server.listen(PORT, () => {
   console.log(`GPS WebSocket server is running on port ${PORT}`);
   console.log(`Connect to: ws://localhost:${PORT}`);
 });
 
-// Graceful shutdown
 process.on("SIGINT", () => {
-  console.log("Shutting down server...");
+  console.log("Shutting down server");
   wss.close(() => {
     server.close(() => {
-      console.log("Server closed");
+      console.log("server closed");
       process.exit(0);
     });
   });
 });
-
-export {
-  LocationData,
-  BroadcastLocationData,
-  ClientMessage,
-  ServerMessage,
-  ClientInfo,
-};

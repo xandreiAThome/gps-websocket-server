@@ -4,18 +4,20 @@ A TypeScript WebSocket server for real-time GPS bus tracking with multi-client s
 
 ## Features
 
-- \*\*Multi-cl## Client Types
-
-- **`bus_driver`**: Can send location updates for their assigned bus (must register with busId)
-- **`passenger`**: Can only receive location updates from buses they subscribe to
-- **`admin`**: Can both send and receive location updates for monitoring purposesSupport\*\*: Multiple clients can both broadcast and receive locations
-- **Selective Subscription**: Clients can subscribe to receive updates from one specific broadcaster
+- **Multi-client Support**: Multiple clients can both broadcast and receive locations
+- **Selective Subscription**: Clients can subscribe to receive updates from one specific bus
 - **Real-time Location Broadcasting**: Live GPS tracking for multiple buses
-- **Client Role Management**: Clients can be broadcasters, receivers, or both
+- **Client Role Management**: Support for bus drivers, passengers, and admin roles
 - **TypeScript Support**: Strict type checking and comprehensive interfaces
 - **Bus-specific Updates**: Clients only receive location updates from their subscribed bus
 - **Client Information Tracking**: Monitor connected clients and their roles
 - **Error Handling**: Robust error handling and graceful shutdown
+
+## Client Types
+
+- **`bus_driver`**: Can send location updates for their assigned bus (must register with busId)
+- **`passenger`**: Can only receive location updates from buses they subscribe to
+- **`admin`**: Can both send and receive location updates for monitoring purposes
 
 ## Installation
 
@@ -75,13 +77,12 @@ Connect to: `ws://localhost:8080`
 ```json
 {
   "type": "location_update",
+  "userId": "driver_123",
   "data": {
     "latitude": 14.5995,
     "longitude": 120.9842,
     "accuracy": 10,
-    "timestamp": 1641234567890,
-    "busId": "bus_001",
-    "userId": "user_123"
+    "timestamp": 1641234567890
   }
 }
 ```
@@ -91,6 +92,7 @@ Connect to: `ws://localhost:8080`
 ```json
 {
   "type": "subscribe",
+  "userId": "passenger_456",
   "subscribeToBusId": "bus_001"
 }
 ```
@@ -99,7 +101,8 @@ Connect to: `ws://localhost:8080`
 
 ```json
 {
-  "type": "unsubscribe"
+  "type": "unsubscribe",
+  "userId": "passenger_456"
 }
 ```
 
@@ -141,7 +144,7 @@ Connect to: `ws://localhost:8080`
   "clients": [
     {
       "id": "abc123def",
-      "type": "both",
+      "type": "bus_driver",
       "busId": "bus_001",
       "userId": "driver_123",
       "connected": true
@@ -158,12 +161,6 @@ Connect to: `ws://localhost:8080`
   "message": "Client not authorized to broadcast location"
 }
 ```
-
-## Client Types
-
-- **`broadcaster`**: Can only send location updates
-- **`receiver`**: Can only receive location updates
-- **`both`**: Can both send and receive location updates (default)
 
 ## How It Works
 
@@ -183,10 +180,10 @@ Connect to: `ws://localhost:8080`
 {"type": "register", "clientType": "bus_driver", "busId": "bus_001", "userId": "driver_123"}
 
 // Send location updates for your assigned bus
-{"type": "location_update", "data": {"latitude": 14.5995, "longitude": 120.9842, "timestamp": 1641234567890}}
+{"type": "location_update", "userId": "driver_123", "data": {"latitude": 14.5995, "longitude": 120.9842, "timestamp": 1641234567890}}
 
 // Optionally monitor another bus
-{"type": "subscribe", "subscribeToBusId": "bus_002"}
+{"type": "subscribe", "userId": "driver_123", "subscribeToBusId": "bus_002"}
 ```
 
 **Passenger:**
@@ -196,10 +193,10 @@ Connect to: `ws://localhost:8080`
 {"type": "register", "clientType": "passenger", "userId": "passenger_456"}
 
 // Subscribe to track a specific bus
-{"type": "subscribe", "subscribeToBusId": "bus_001"}
+{"type": "subscribe", "userId": "passenger_456", "subscribeToBusId": "bus_001"}
 
 // Switch to track a different bus
-{"type": "subscribe", "subscribeToBusId": "bus_003"}
+{"type": "subscribe", "userId": "passenger_456", "subscribeToBusId": "bus_003"}
 ```
 
 **Admin/Monitoring:**
@@ -209,10 +206,10 @@ Connect to: `ws://localhost:8080`
 {"type": "register", "clientType": "admin", "userId": "admin_001"}
 
 // Monitor specific bus
-{"type": "subscribe", "subscribeToBusId": "bus_001"}
+{"type": "subscribe", "userId": "admin_001", "subscribeToBusId": "bus_001"}
 
-// Send test location updates (if needed)
-{"type": "location_update", "data": {"latitude": 14.5995, "longitude": 120.9842, "timestamp": 1641234567890}}
+// Send test location updates (if needed for admin monitoring)
+{"type": "location_update", "userId": "admin_001", "data": {"latitude": 14.5995, "longitude": 120.9842, "timestamp": 1641234567890}}
 ```
 
 ````
