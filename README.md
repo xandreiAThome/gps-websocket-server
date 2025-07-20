@@ -212,8 +212,6 @@ Connect to: `ws://localhost:8080`
 {"type": "location_update", "userId": "admin_001", "data": {"latitude": 14.5995, "longitude": 120.9842, "timestamp": 1641234567890}}
 ```
 
-````
-
 **Error:**
 
 ```json
@@ -221,7 +219,7 @@ Connect to: `ws://localhost:8080`
   "type": "error",
   "message": "Invalid message format"
 }
-````
+```
 
 ## Environment Variables
 
