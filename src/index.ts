@@ -81,7 +81,13 @@ wss.on("connection", (ws: WebSocket) => {
   ws.on("close", () => {
     const clientInfo = clients.get(ws);
     if (clientInfo) {
-      console.log(`Client ${clientInfo.id} disconnected`);
+      console.log(
+        `Client ${clientInfo.id} (${clientInfo.userId}) disconnected`
+      );
+
+      // Store bus info for potential subscriber notification
+      const wasBusDriver = clientInfo.type === "bus_driver" && clientInfo.busId;
+      const busId = clientInfo.busId;
 
       // Clean up subscriptions
       if (clientInfo.subscribedToBusId) {
@@ -97,7 +103,62 @@ wss.on("connection", (ws: WebSocket) => {
       // Remove client from clients map
       clients.delete(ws);
 
-      // Broadcast updated client list
+      // If this was a bus driver, check if there are other drivers for this bus
+      if (wasBusDriver && busId) {
+        const otherDrivers = Array.from(clients.values()).filter(
+          (client) => client.type === "bus_driver" && client.busId === busId
+        );
+
+        if (otherDrivers.length === 0) {
+          // No other drivers for this bus, remove location data
+          busLocations.delete(busId);
+          console.log(
+            `Bus ${busId} went offline - no active drivers remaining`
+          );
+
+          // Notify subscribers of this specific bus
+          const subscribers = busSubscriptions.get(busId);
+          if (subscribers && subscribers.size > 0) {
+            const offlineMessage: ServerMessage = {
+              type: "error",
+              message: `Bus ${busId} went offline`,
+            };
+
+            const jsonMessage = JSON.stringify(offlineMessage);
+            subscribers.forEach((client) => {
+              if (client.readyState === WebSocket.OPEN) {
+                client.send(jsonMessage);
+              }
+            });
+
+            // Send updated client list to subscribers of this bus
+            const updatedClientList: ClientInfo[] = Array.from(
+              clients.values()
+            );
+            const activeBuses = Array.from(busLocations.keys());
+
+            const clientListMessage: ServerMessage = {
+              type: "client_list",
+              clients: updatedClientList,
+              activeBuses: activeBuses,
+              clientCount: clients.size,
+            };
+
+            const clientListJson = JSON.stringify(clientListMessage);
+            subscribers.forEach((client) => {
+              if (client.readyState === WebSocket.OPEN) {
+                client.send(clientListJson);
+              }
+            });
+
+            console.log(
+              `Sent updated client list to ${subscribers.size} subscribers of bus ${busId}`
+            );
+          }
+        }
+      }
+
+      // Broadcast updated client list to all clients
       broadcastClientList();
     }
   });
