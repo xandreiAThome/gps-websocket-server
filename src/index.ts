@@ -414,6 +414,64 @@ function broadcastClientList() {
 const PORT = Number(process.env["PORT"]) || 8080;
 const HOST = "0.0.0.0"; // Bind to all interfaces
 
+// Cleanup function to remove dead connections
+function cleanupDeadConnections() {
+  const deadConnections: WebSocket[] = [];
+
+  clients.forEach((_, ws) => {
+    if (
+      ws.readyState === WebSocket.CLOSED ||
+      ws.readyState === WebSocket.CLOSING
+    ) {
+      deadConnections.push(ws);
+    }
+  });
+
+  if (deadConnections.length > 0) {
+    console.log(`🧹 Cleaning up ${deadConnections.length} dead connections`);
+    deadConnections.forEach((ws) => {
+      const clientInfo = clients.get(ws);
+      if (clientInfo) {
+        console.log(
+          `   Removing dead client: ${clientInfo.userId || clientInfo.id}`
+        );
+
+        // Clean up subscriptions
+        if (clientInfo.subscribedToBusId) {
+          const subscribers = busSubscriptions.get(
+            clientInfo.subscribedToBusId
+          );
+          if (subscribers) {
+            subscribers.delete(ws);
+            if (subscribers.size === 0) {
+              busSubscriptions.delete(clientInfo.subscribedToBusId);
+            }
+          }
+        }
+
+        // Remove from clients map
+        clients.delete(ws);
+      }
+    });
+
+    // Broadcast updated client list if any connections were cleaned up
+    broadcastClientList();
+  }
+}
+
+// Run cleanup every 2 minutes
+const cleanupInterval = setInterval(cleanupDeadConnections, 120000);
+
+// Heartbeat to detect dead connections
+const heartbeatInterval = setInterval(() => {
+  clients.forEach((_, ws) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      // Send ping to keep connection alive and detect dead ones
+      ws.ping();
+    }
+  });
+}, 30000); // Every 30 seconds
+
 server.listen(PORT, HOST, () => {
   console.log(`🚀 GPS WebSocket server is running on ${HOST}:${PORT}`);
   console.log(`📱 Local access: ws://localhost:${PORT}`);
@@ -436,11 +494,77 @@ server.listen(PORT, HOST, () => {
 });
 
 process.on("SIGINT", () => {
-  console.log("Shutting down server");
-  wss.close(() => {
-    server.close(() => {
-      console.log("server closed");
-      process.exit(0);
-    });
+  console.log("\n🛑 Shutting down server...");
+
+  // Clear intervals to prevent them from keeping the process alive
+  clearInterval(cleanupInterval);
+  clearInterval(heartbeatInterval);
+
+  // Notify all connected clients about server shutdown
+  const shutdownMessage: ServerMessage = {
+    type: "error",
+    message: "Server is shutting down",
+  };
+
+  const shutdownJson = JSON.stringify(shutdownMessage);
+
+  console.log(`📢 Notifying ${clients.size} connected clients about shutdown`);
+  clients.forEach((clientInfo, ws) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      console.log(
+        `   Notifying client ${clientInfo.userId || clientInfo.id} (${
+          clientInfo.type
+        })`
+      );
+      ws.send(shutdownJson);
+
+      // Give client time to receive message, then close
+      setTimeout(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close(1001, "Server shutting down");
+        }
+      }, 100);
+    }
   });
+
+  // Force close WebSocket server after a short delay
+  setTimeout(() => {
+    console.log("🔌 Closing WebSocket server...");
+    wss.close(() => {
+      console.log("✅ WebSocket server closed");
+
+      // Close HTTP server
+      server.close(() => {
+        console.log("✅ HTTP server closed");
+        console.log("👋 Server shutdown complete");
+        process.exit(0);
+      });
+
+      // Force exit if server doesn't close within 5 seconds
+      setTimeout(() => {
+        console.log(
+          "⚠️ Force closing server - some connections may not have closed gracefully"
+        );
+        process.exit(1);
+      }, 5000);
+    });
+  }, 500);
+});
+
+// Handle SIGTERM (for production deployments)
+process.on("SIGTERM", () => {
+  console.log("\n🛑 Received SIGTERM, shutting down gracefully...");
+  process.emit("SIGINT");
+});
+
+// Handle uncaught exceptions
+process.on("uncaughtException", (error) => {
+  console.error("💥 Uncaught Exception:", error);
+  process.emit("SIGINT");
+});
+
+// Handle unhandled promise rejections
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("💥 Unhandled Rejection at:", promise, "reason:", reason);
+  process.emit("SIGINT");
 });
