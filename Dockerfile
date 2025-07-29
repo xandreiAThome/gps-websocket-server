@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:20-alpine AS builder
 
 # Set working directory
 WORKDIR /app
@@ -6,36 +6,29 @@ WORKDIR /app
 # Copy package.json and package-lock.json (if present)
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install --production
+# Install all dependencies (including dev for build)
+RUN npm install
 
 # Copy source code
 COPY . .
 
-# Build TypeScript (if needed)
-RUN npm run build || true
+# Build TypeScript to dist/
+RUN npm run build
 
-# Expose port (default 8080, can be overridden)
-EXPOSE 8080
+# --- Production image ---
+FROM node:20-alpine AS production
+WORKDIR /app
 
-# Start the server
-CMD ["node", "dist/index.js"]# Use official Node.js LTS image
-FROM node:20-alpine
-
-# Set working directory
-WORKDIR /usr/src/app
-
-# Copy package.json and package-lock.json
+# Copy only production dependencies
 COPY package*.json ./
-
-# Install dependencies
 RUN npm install --production
 
-# Copy source code
-COPY . .
+# Copy built code and assets from builder
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/README.md ./
 
 # Expose port (default 8080)
 EXPOSE 8080
 
 # Start the server
-CMD ["npm", "start"]
+CMD ["node", "dist/index.js"]
