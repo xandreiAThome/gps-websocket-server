@@ -227,6 +227,58 @@ function handleClientMessage(ws: WebSocket, message: ClientMessage) {
         break;
       }
 
+    case "subscribe":
+      if (!message.userId) {
+        const errMsg: ServerMessage = {
+          type: "error",
+          message: "register first with userId",
+        };
+        ws.send(JSON.stringify(errMsg));
+        return;
+      }
+
+      if (!message.subscribeToBusId) {
+        const errorMessage: ServerMessage = {
+          type: "error",
+          message: "Must specify busId to subscribe to",
+        };
+        ws.send(JSON.stringify(errorMessage));
+        return;
+      }
+
+      if (clientInfo.subscribedToBusId) {
+        const oldSubscribers = busSubscriptions.get(
+          clientInfo.subscribedToBusId
+        );
+        if (oldSubscribers) {
+          oldSubscribers.delete(ws);
+          if (oldSubscribers.size === 0) {
+            busSubscriptions.delete(clientInfo.subscribedToBusId);
+          }
+        }
+      }
+
+      clientInfo.subscribedToBusId = message.subscribeToBusId;
+
+      if (!busSubscriptions.has(message.subscribeToBusId)) {
+        busSubscriptions.set(message.subscribeToBusId, new Set());
+      }
+      busSubscriptions.get(message.subscribeToBusId)!.add(ws);
+
+      console.log(
+        `Client ${clientInfo.id} subscribed to bus ${message.subscribeToBusId}`
+      );
+
+      const currLoc = busLocations.get(message.subscribeToBusId);
+      if (currLoc) {
+        const locationMsg: ServerMessage = {
+          type: "location_broadcast",
+          data: currLoc,
+        };
+        ws.send(JSON.stringify(locationMsg));
+      }
+      break;
+
     case "location_update":
       if (!message.userId) {
         const errMsg: ServerMessage = {
