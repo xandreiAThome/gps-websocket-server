@@ -180,6 +180,22 @@ function handleClientMessage(ws: WebSocket, message: ClientMessage) {
         return;
       }
 
+      // If another connection with this userId exists, ignore this registration
+      if (message.userId) {
+        for (const [otherWs, otherInfo] of clients.entries()) {
+          if (otherWs !== ws && otherInfo.userId === message.userId) {
+            // There is already a connection for this userId, so ignore this registration
+            const errMsg: ServerMessage = {
+              type: "error",
+              message:
+                "A connection for this userId already exists. Only the first connection is kept.",
+            };
+            ws.send(JSON.stringify(errMsg));
+            return;
+          }
+        }
+      }
+
       if (message.clientType) {
         if (message.clientType === "bus_driver" && !message.busId) {
           const errMsg: ServerMessage = {
@@ -246,58 +262,6 @@ function handleClientMessage(ws: WebSocket, message: ClientMessage) {
           message: "Only bus drivers and admins can broadcast location updates",
         };
         ws.send(JSON.stringify(errorMessage));
-      }
-      break;
-
-    case "subscribe":
-      if (!message.userId) {
-        const errMsg: ServerMessage = {
-          type: "error",
-          message: "register first with userId",
-        };
-        ws.send(JSON.stringify(errMsg));
-        return;
-      }
-
-      if (!message.subscribeToBusId) {
-        const errorMessage: ServerMessage = {
-          type: "error",
-          message: "Must specify busId to subscribe to",
-        };
-        ws.send(JSON.stringify(errorMessage));
-        return;
-      }
-
-      if (clientInfo.subscribedToBusId) {
-        const oldSubscribers = busSubscriptions.get(
-          clientInfo.subscribedToBusId
-        );
-        if (oldSubscribers) {
-          oldSubscribers.delete(ws);
-          if (oldSubscribers.size === 0) {
-            busSubscriptions.delete(clientInfo.subscribedToBusId);
-          }
-        }
-      }
-
-      clientInfo.subscribedToBusId = message.subscribeToBusId;
-
-      if (!busSubscriptions.has(message.subscribeToBusId)) {
-        busSubscriptions.set(message.subscribeToBusId, new Set());
-      }
-      busSubscriptions.get(message.subscribeToBusId)!.add(ws);
-
-      console.log(
-        `Client ${clientInfo.id} subscribed to bus ${message.subscribeToBusId}`
-      );
-
-      const currLoc = busLocations.get(message.subscribeToBusId);
-      if (currLoc) {
-        const locationMsg: ServerMessage = {
-          type: "location_broadcast",
-          data: currLoc,
-        };
-        ws.send(JSON.stringify(locationMsg));
       }
       break;
 
